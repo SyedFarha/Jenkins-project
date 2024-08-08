@@ -1,75 +1,63 @@
 pipeline {
     agent any
-    
     environment {
-        GOOGLE_APPLICATION_CREDENTIALS = credentials('service-account') // Replace 'service-account' with your Jenkins credentials ID
-        PROJECT_ID = 'devops-testing-419206' // Replace with your actual project ID
-        REGION = 'asia-south1' // Replace with your actual region
+        // Deployment configuration
+        DEPLOY_TARGET = 'staging'
+        FEATURE_X_ENABLED = 'true'
+        TEST_ENVIRONMENT = 'integration'
     }
-
-    triggers {
-        githubPullRequest {
-            triggerPhrase('deploy') // Phrase used in PR comments to trigger deployments
-            onlyTriggerPhrase(true) // Only trigger on the specified phrase
-        }
-    }
-
     stages {
         stage('Checkout') {
             steps {
                 // Checkout the repository
-                git branch: 'main', url: 'https://github.com/your-username/your-repository.git'
+                git branch: 'main', url: 'https://github.com/syeda-farha-2023/Jenkins-project.git'
             }
         }
-        stage('Detect Changes') {
+        stage('Activate Service Account') {
             steps {
-                script {
-                    // Get the list of modified files from the PR
-                    def changedFiles = sh(script: 'git diff --name-only origin/main...HEAD', returnStdout: true).trim().split('\n')
-                    
-                    // Initialize an empty list to store updated cloud functions
-                    def updatedFunctions = []
-
-                    // Detect which cloud functions have been modified
-                    for (file in changedFiles) {
-                        if (file.startsWith('cloud_function1/')) {
-                            updatedFunctions.add('cloud_function1')
-                        } else if (file.startsWith('cloud_function2/')) {
-                            updatedFunctions.add('cloud_function2')
-                        }
-                    }
-
-                    // Remove duplicates
-                    updatedFunctions = updatedFunctions.unique()
-
-                    echo "Updated cloud functions: ${updatedFunctions}"
+                withCredentials([file(credentialsId: 'channelpay-cloud-function-admin-sa', variable: 'SERVICE_ACCOUNT_KEY_PATH')]) {
+                    sh 'gcloud auth activate-service-account --key-file="${SERVICE_ACCOUNT_KEY_PATH}"'
                 }
             }
         }
-
-        stage('Deploy Updated Functions') {
+        stage('Deploy Functions') {
             steps {
                 script {
-                    // Loop through updated functions and deploy each one
-                    for (function in updatedFunctions) {
-                        dir(function) {
-                            sh './deploy.sh'
+                    // List all subdirectories (ignoring the current directory)
+                    def directories = sh(script: 'find . -mindepth 1 -maxdepth 1 -type d', returnStdout: true).trim().split('\n')
+                    for (dir in directories) {
+                        dir(dir) {
+                            // Check if deploy.sh exists and execute it
+                            if (fileExists('deploy.sh')) {
+                                sh './deploy.sh'
+                            } else {
+                                // Use a generic deployment command if no deploy.sh exists
+                                echo "No deploy.sh found in ${dir}, using default gcloud deploy command"
+                                sh "gcloud functions deploy --runtime python39 --trigger-http --allow-unauthenticated"
+                            }
                         }
                     }
                 }
             }
         }
     }
-
     post {
         success {
-            echo 'Deployment successful!'
+            mail to: 'sagar.vaghela@goapptiv.com',
+                subject: "Pipeline Successful: ${env.JOB_NAME}",
+                body: "Your Jenkins pipeline ${env.JOB_NAME} has completed successfully.\nBuild Number: ${env.BUILD_NUMBER}\nDuration: ${currentBuild.durationString}\nStatus: SUCCESS"
         }
         failure {
-            echo 'Deployment failed.'
+            mail to: 'sagar.vaghela@goapptiv.com',
+                subject: "Pipeline Failed: ${env.JOB_NAME}",
+                body: "Your Jenkins pipeline ${env.JOB_NAME} has failed. Please check the console output for more details.\nBuild Number: ${env.BUILD_NUMBER}\nDuration: ${currentBuild.durationString}\nStatus: FAILURE"
+        }
+        always {
+            // Adjust cleanup commands as needed
+            script {
+                sh 'rm -f .env'
+                sh 'rm -rf temp/*'
+            }
         }
     }
-}
-
-
-
+}  
